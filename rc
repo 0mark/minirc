@@ -174,9 +174,11 @@ default_poll() {
         return 0;;  # doesn't make much sense for this service
     iptables)
         iptables -L | grep -m 1 -q '^ACCEPT\|^REJECT';;
+    dbus)
+        pgrep "dbus-daemon" ;;
     *)
         # fallback: check if any processes of that name are running
-        pgrep "$1" >& /dev/null;;
+        pgrep "^$1\$" >& /dev/null;;
     esac
 }
 

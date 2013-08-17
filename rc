@@ -12,10 +12,10 @@ NETWORK_INTERFACE="eth0"
 WIFI_INTERFACE="wlan0"
 
 # User-definable start/stop/restart/poll functions
-custom_restart() { "$1" }
-custom_start()   { default_stop "$1"; default_start "$1" }
-custom_stop()    { killall "$1" }
-custom_poll()    { pgrep "^$1\$" >& /dev/null }
+custom_restart() { "$1"; }
+custom_start()   { default_stop "$1"; default_start "$1"; }
+custom_stop()    { killall "$1"; }
+custom_poll()    { pgrep "^$1\$" >& /dev/null; }
 
 source /etc/minirc.conf
 

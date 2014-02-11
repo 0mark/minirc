@@ -4,20 +4,20 @@
 
 # Fallback Configuration Values, to be able to run even with a broken, deleted
 # or outdated minirc.conf:
-DAEMONS="apifs network udev mount syslog-ng iptables alsa crond dbus wpa_supplicant dhcpcd sshd acpid ntpd"
 CORE="apifs network udev mount"
-ENABLED="${CORE} @syslog-ng @crond @dhcpcd @sshd"
+EXTRA="acpid alsa avahi conman cups dbus dhcpcd iptables ldm nfsmount ntpd sshd syslog-ng wpa_supplicant"
+ENABLED="${CORE} syslog-ng @crond @dhcpcd @sshd"
 UDEV="busybox"
 NETWORK_INTERFACE="eth0"
 WIFI_INTERFACE="wlan0"
 
 # User-definable start/stop/restart/poll functions
-custom_restart() { "$1"; }
-custom_start()   { default_stop "$1"; default_start "$1"; }
+custom_restart() { default_stop "$1"; default_start "$1"; }
+custom_start()   { "$1"; }
 custom_stop()    { killall "$1"; }
 custom_poll()    { pgrep "^$1\$" >& /dev/null; }
 
-source /etc/minirc.conf
+source /etc/minirc_test.conf
 
 on_boot() {
     #===================
@@ -32,9 +32,9 @@ on_boot() {
     echo_color 2 " * " "starting daemons:"
     for dmn in $ENABLED; do
         if [[ "${dmn:0:1}" == '@' ]]; then
-            custom_start "${dmn:1}" &
+            run start "${dmn:1}" &
         else
-            custom_start "$dmn"
+            run start "$dmn"
         fi
     done
     echo
@@ -56,12 +56,12 @@ on_shutdown() {
 }
 
 default_start() {
-    echo -n " $1"
     case "$1" in
-    all)
-        for dmn in $DAEMONS $ENABLED; do
-            custom_poll "${dmn##@}" || custom_start "${dmn##@}"
-        done
+    acpid)
+        acpid 
+        ;;
+    alsa)
+        alsactl restore
         ;;
     apifs)
         mountpoint -q /proc    || mount -t proc proc /proc -o nosuid,noexec,nodev
@@ -72,10 +72,64 @@ default_start() {
         mountpoint -q /dev/pts || mount -t devpts devpts /dev/pts -o mode=0620,gid=5,nosuid,noexec
         mountpoint -q /dev/shm || mount -t tmpfs shm /dev/shm -o mode=1777,nosuid,nodev
         ;;
+    avahi)
+        /usr/bin/avahi-daemon &
+        /usr/bin/avahi-dnsconfd -s
+        ;;
+    conman)
+        /usr/bin/connmand --nodnsproxy
+        ;;
+    cups)
+        cupsd
+        ;;
+    dbus)
+        mkdir -p /run/dbus
+        /usr/bin/dbus-daemon --system #--address=systemd: --nofork --nopidfile --systemd-activation
+        ;;
+    dhcpcd)
+        if ip link | grep -Fq $NETWORK_INTERFACE; then :; else
+            echo_color 3 "waiting for $NETWORK_INTERFACE to settle..."
+            for i in $(seq 100); do
+                ip link | grep -Fq $NETWORK_INTERFACE && break
+                sleep 0.1
+            done
+        fi
+        dhcpcd -nqb
+        ;;
+    iptables)
+        iptables-restore < /etc/iptables/iptables.rules
+        ;;
+    ldm)
+        if [ ! -z $LDM_USER -a ! -z $LDM_GROUP ]; then
+            /opt/bin/ldm -d -u $LDM_USER -g $LDM_GROUP -c /opt/bin/ldm_callback &> /dev/null
+        else
+            echo "LDM_USER or LDM_GROUP not set!"
+            return 1
+        fi
+        ;;
+    mount)
+        mount -a -F
+        mount -o remount,rw /
+        ;;
     network)
         /usr/sbin/ip link set up dev lo
-
         cat /etc/hostname >| /proc/sys/kernel/hostname
+        ;;
+    nfsmount)
+        /usr/bin/rpcbind
+        /usr/bin/rpc.statd
+        ;;
+    ntpd)
+        ntpd -g -u ntp
+        ;;
+    sshd)
+        if [ ! -f /etc/ssh/ssh_host_rsa_key -o ! -f /etc/ssh/ssh_host_dsa_key -o ! -f /etc/ssh/ssh_host_ecdsa_key ]; then
+                /usr/bin/ssh-keygen -A
+        fi
+        /usr/bin/sshd  # requires an absolute path
+        ;;
+    syslog-ng)
+        syslog-ng
         ;;
     udev)
         if [ "$UDEV" == systemd ]; then
@@ -87,39 +141,6 @@ default_start() {
             echo /sbin/mdev > /proc/sys/kernel/hotplug
         fi
         ;;
-    mount)
-        mount -a
-        mount -o remount,rw /
-        ;;
-
-    acpid)
-        acpid &> /dev/null
-        ;;
-    alsa)
-        alsactl restore
-        ;;
-    dbus)
-        mkdir -p /run/dbus
-        /usr/bin/dbus-daemon --system
-        ;;
-    iptables)
-        iptables-restore < /etc/iptables/iptables.rules
-        ;;
-    sshd)
-        /usr/bin/sshd  # requires an absolute path
-        ;;
-    dhcpcd)
-        if ip link | grep -Fq $NETWORK_INTERFACE; then :; else
-            echo_color 3 "waiting for $NETWORK_INTERFACE to settle..."
-            for i in $(seq 100); do
-                ip link | grep -Fq $NETWORK_INTERFACE && break
-                sleep 0.1
-            done
-        fi
-        dhcpcd -nqb;;
-    ntpd)
-        ntpd -g -u ntp
-        ;;
     wpa_supplicant)
         wpa_supplicant -Dwext -B -i"$WIFI_INTERFACE" -c/etc/wpa_supplicant.conf
         ;;
@@ -130,29 +151,41 @@ default_start() {
 }
 
 default_stop() {
-    echo -n " $1"
     case "$1" in
-    all)
-        for dmn in $DAEMONS $ENABLED; do
-            custom_poll "${dmn##@}" && custom_stop "${dmn##@}"
-        done;;
+    alsa)
+        alsactl store
+        ;;
     apifs)
         umount -r /run
+        ;;
+    avahi)
+        killall avahi-daemon
+        killall avahi-dnsconfd
+        ;;
+    conman)
+        killall connmand
+        ;;
+    cups)
+        killall cupsd
+        ;;
+    dbus)
+        kill $(cat /run/dbus/pid)
+        rm /run/dbus/pid
+        ;;
+    iptables)
+        for table in $(cat /proc/net/ip_tables_names); do
+            iptables-restore < /var/lib/iptables/empty-$table.rules
+        done
+        ;;
+    nfsmount)
+        killall rpc.statd
+        killall rpcbind
         ;;
     udev)
         if [ "$UDEV" == systemd ]; then
             killall systemd-udevd
         fi
         ;;
-    alsa)
-        alsactl store;;
-    dbus)
-        killall dbus-launch
-        killall dbus-daemon;;
-    iptables)
-        for table in $(cat /proc/net/ip_tables_names); do
-            iptables-restore < /var/lib/iptables/empty-$table.rules
-        done;;
     *)
         custom_stop "$@"
         ;;
@@ -164,13 +197,42 @@ default_restart() { custom_restart "$@"; }
 default_poll() {
     case "$1" in
     alsa)
-        return 0  # doesn't make much sense for this service
+        return 255  # doesn't make much sense for this service
+        ;;
+    apifs)
+        [ $(df -a | egrep "/proc\$|/sys\$|/run\$|/dev\$|/dev/pts\$|/dev/shm\$" | wc -l) -eq 6 ]
+        ;;
+    avahi)
+        pgrep avahi-daemon && pgrep avahi-dnsconfd > /dev/null
+        ;;
+    cups)
+        pgrep cupsd > /dev/null
+        ;;
+    dbus)
+        pid=$(cat /run/dbus/pid);
+        [ "$(ps $pid | wc -l)" -eq 2 ]
+        ;;
+    conman)
+        pgrep connmand > /dev/null
         ;;
     iptables)
         iptables -L | grep -m 1 -q '^ACCEPT\|^REJECT'
         ;;
-    dbus)
-        pgrep "dbus-daemon"
+    network)
+        ip link | grep ": lo:" &> /dev/null
+        ;;
+    mount)
+        return 255  # doesn't make much sense for this service
+        ;;
+    nfsmount)
+        pgrep rpcbind && pgrep rpc.statd > /dev/null
+        ;;
+    udev)
+        if [ "$UDEV" == systemd ]; then
+            ps -A | grep systemd-udevd &> /dev/null
+        else # use busybox mdev as fallback:
+            ps -A | grep mdev &> /dev/null
+        fi
         ;;
     *)
         custom_poll "$@"
@@ -178,16 +240,42 @@ default_poll() {
     esac
 }
 
+run() {
+    cmd=$1; dmn=$2
+    echo_color 4 " * " "${cmd}ing"
+    echo -n " $dmn"
+    msg=$(default_${cmd} "$dmn" 2>&1)
+
+    if [ "$?" -gt 0 ]; then
+        echo_color 1 " [FAIL]"
+        logger -t rc $@ [ FAILED ]
+        errors[$dmn]=$msg
+    else
+        echo_color 2 " [OK]"
+    fi
+}
+
 echo_color() {
   color="$1"
   shift
-  text="$@"
-  echo -n -e "\033[1;3${color}m$text\033[00m"
+  text="$1"
+  shift
+  echo -n -e "\033[1;3${color}m$text\033[00m$@"
 }
 
+list_errors() {
+    if [ ${#errors[@]} -gt 0 ]; then
+        echo_color 1 " * " "Some errors occured:\n"
+        for i in "${!errors[@]}"; do
+            echo_color 1 " ! " "$i\n"
+            echo ${errors[$i]}
+        done
+    fi
+}
 
 #===================
 # handle arguments
+declare -A errors
 case "$1" in
 init)
     on_boot
@@ -198,19 +286,29 @@ shutdown)
 start|stop|restart)
     cmd="$1"
     shift
-    for dmn in ${@:-$DAEMONS}; do
-        echo -n "${cmd}ing "
-        custom_${cmd} "$dmn"
+    for dmn in ${@}; do
+        run $cmd $dmn
+        echo
+        list_errors
     done
     ;;
 ''|list)
     # list all daemons and their status
-    for dmn in $DAEMONS; do
-        if custom_poll "$dmn" >& /dev/null; then
-            echo_color 2 "[X] ${dmn}\n"
-        else
-            echo_color 0 "[ ] ${dmn}\n"
-        fi
+    for grp in CORE EXTRA LOCAL; do
+        echo_color 4 " * " "$grp\n"
+        for dmn in ${!grp}; do
+            if [[ " $DISABLE " != *" $dmn "* ]]; then
+                default_poll "$dmn" >& /dev/null
+                ret=$?
+                if [ $ret -eq 0 ]; then
+                    echo_color 2 "[X] ${dmn}\n"
+                elif [ $ret -eq 255 ]; then
+                    echo_color 3 "[?] ${dmn}\n"
+                else
+                    echo_color 0 "[ ] ${dmn}\n"
+                fi
+            fi
+        done
     done
     ;;
 --version)

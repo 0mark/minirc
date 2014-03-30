@@ -5,9 +5,11 @@
 # Fallback Configuration Values, to be able to run even with a broken, deleted
 # or outdated minirc.conf:
 CORE="apifs network udev mount"
-EXTRA="acpid alsa avahi conman cups dbus dhcpcd iptables ldm nfsmount ntpd sshd syslog-ng wpa_supplicant"
+EXTRA="acpid alsa avahi conman consolefont cups dbus dhcpcd iptables keymap ldm local nfsmount ntpd sshd syslog-ng wpa_supplicant"
+LOCAL=""
+DISABLE=""
 ENABLED="${CORE} syslog-ng @crond @dhcpcd @sshd"
-UDEV="busybox"
+[ -f /usr/lib/systemd/systemd ] && UDEV="systemd" || UDEV="busybox"
 NETWORK_INTERFACE="eth0"
 WIFI_INTERFACE="wlan0"
 
@@ -17,25 +19,19 @@ custom_start()   { "$1"; }
 custom_stop()    { killall "$1"; }
 custom_poll()    { pgrep "^$1\$" >& /dev/null; }
 
-source /etc/minirc_test.conf
+source /etc/minirc.conf
 
 on_boot() {
     #===================
-    # load /etc/minirc.local
-    if [ -x /etc/minirc.local ]; then
-        echo_color 2 " * " "loading /etc/minirc.local...\n"
-        /etc/minirc.local
-    fi
-
-    #===================
     # start the default daemons
-    echo_color 2 " * " "starting daemons:"
+    echo_color 2 " # " "starting daemons:\n"
     for dmn in $ENABLED; do
         if [[ "${dmn:0:1}" == '@' ]]; then
-            run start "${dmn:1}" &
+            bg_run start "${dmn:1}"
         else
             run start "$dmn"
         fi
+        echo
     done
     echo
 }
@@ -43,8 +39,25 @@ on_boot() {
 on_shutdown() {
     #===================
     # stop the default daemons
-    echo_color 4 " † " "stopping daemons: "
-    custom_stop all
+    echo_color 4 " † " "stopping daemons:\n"
+    eroc=""
+    for dmn in $CORE; do
+        eroc="$dmn $eroc"
+    done
+    for grp in LOCAL EXTRA eroc; do
+        echo_color 4 " * " "$grp\n"
+        for dmn in ${!grp}; do
+            if [[ " $DISABLE " != *" $dmn "* ]]; then
+                default_poll "$dmn" >& /dev/null
+                ret=$?
+                if [ $ret -eq 0 ]; then
+                    echo custom_stop "$dmn"
+                elif [ $ret -eq 255 ]; then
+                    echo custom_stop "$dmn"
+                fi
+            fi
+        done
+    done
     echo
 
     #===================
@@ -79,6 +92,14 @@ default_start() {
     conman)
         /usr/bin/connmand --nodnsproxy
         ;;
+    consolefont)
+        if [ ! -z "$FONT" ]; then
+            setfont $FONT
+        else
+            echo "FONT not set"
+            exit 255
+        fi
+        ;;
     cups)
         cupsd
         ;;
@@ -99,11 +120,27 @@ default_start() {
     iptables)
         iptables-restore < /etc/iptables/iptables.rules
         ;;
+    keymap)
+        if [ ! -z "$KEYMAP" ]; then
+            loadkeys $KEYMAP > /dev/null
+        else
+            echo "KEYMAP not set"
+            exit 255
+        fi
+        ;;
     ldm)
         if [ ! -z $LDM_USER -a ! -z $LDM_GROUP ]; then
             /opt/bin/ldm -d -u $LDM_USER -g $LDM_GROUP -c /opt/bin/ldm_callback &> /dev/null
         else
             echo "LDM_USER or LDM_GROUP not set!"
+            return 1
+        fi
+        ;;
+    local)
+        if [ -x /etc/minirc.local ]; then
+            /etc/minirc.local
+        else
+            echo "/etc/minirc.local not found!"
             return 1
         fi
         ;;
@@ -215,8 +252,17 @@ default_poll() {
     conman)
         pgrep connmand > /dev/null
         ;;
+    consolefont)
+        return 255  # doesn't make much sense for this service
+        ;;
     iptables)
         iptables -L | grep -m 1 -q '^ACCEPT\|^REJECT'
+        ;;
+    keymap)
+        return 255  # doesn't make much sense for this service
+        ;;
+    local)
+        return 255  # doesn't make much sense for this service
         ;;
     network)
         ip link | grep ": lo:" &> /dev/null
@@ -242,8 +288,7 @@ default_poll() {
 
 run() {
     cmd=$1; dmn=$2
-    echo_color 4 " * " "${cmd}ing"
-    echo -n " $dmn"
+    echo_color 4 " * " "${cmd}ing $dmn"
     msg=$(default_${cmd} "$dmn" 2>&1)
 
     if [ "$?" -gt 0 ]; then
@@ -252,6 +297,21 @@ run() {
         errors[$dmn]=$msg
     else
         echo_color 2 " [OK]"
+    fi
+}
+
+bg_run() {
+    cmd=$1; dmn=$2
+    echo_color 4 " o " "${cmd}ing $dmn"
+    _bg_run "$1" "$2" &
+}
+
+_bg_run() {
+    cmd=$1; dmn=$2
+    msg=$(default_${cmd} "$dmn" 2>&1)
+    if [ "$?" -gt 0 ]; then
+        logger -t rc $@ [ FAILED ]
+        echo -e "**** ${@} ****\n"'$msg' >> /var/log/minirc_failed.log
     fi
 }
 
@@ -287,9 +347,17 @@ start|stop|restart)
     cmd="$1"
     shift
     for dmn in ${@}; do
-        run $cmd $dmn
-        echo
-        list_errors
+        if [[ " $CORE $EXTRA $LOCAL " == *" $dmn "* ]]; then
+            if [[ " $DISABLE " != *" $dmn "* ]]; then
+                run $cmd $dmn
+                echo
+                list_errors
+            else
+                echo_color 1 "!" " $dmn is disabled\n"
+            fi
+        else
+            echo_color 1 "!" " $dmn unknown\n"
+        fi
     done
     ;;
 ''|list)

@@ -336,14 +336,16 @@ daemonize() {
 run() {
     cmd=$1; dmn=$2
     echo_color 4 " * " "${cmd}ing $dmn"
-    msg=$(default_${cmd} "$dmn" 2>&1)
+    msgf=$(mktemp rc_msg_XXXX)
+    default_${cmd} "$dmn" &> $msgf
     if [ "$?" -gt 0 ]; then
         echo_color 1 " [FAIL]"
         logger -t rc $@ [ FAILED ]
-        errors[$dmn]=$msg
+        errors[$dmn]=$(cat $msgf)
     else
         echo_color 2 " [OK]"
     fi
+    rm $msgf
 }
 
 bg_run() {

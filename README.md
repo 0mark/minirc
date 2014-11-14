@@ -11,23 +11,13 @@ individually start or stop them.
 It was developed for arch linux to get rid of systemd, but it can probably run
 on other distributions as well.
 
-
-A word of warning
------------------
-
-This works on my machine^TM.  You absolutely need to read and understand what
-it does before using it.  Compare it to your existing init script and see if
-there is something you need to add (for example, setting time zone, mounting
-encrypted non-root file systems and many other things are simply not handled.)
-
-Also, get a rescue system ready because things will break if you don't know
-what you're doing.
+![screenshot](screenshot.png)
 
 
 Installing
 ----------
 
-Dependencies: busybox, optionally systemd (for udev)
+Dependencies: busybox, optionally eudev or systemd (for udev)
 
 NOTE: The archlinux AUR package does step 1 for you.
 
@@ -38,11 +28,11 @@ Make backups as needed.
 
 When you are confident, run "./setup.sh --force"
 
-2. Add init=/sbin/init to your kernel parameters.  Alternatively, since
-/sbin/init is the default, you can just remove it or leave it empty.  Check the
-docs of your boot loader on how to change the kernel parameters.
+2. Remove "init=..." from your kernel parameters (if it is there) so that the
+default value "init=/sbin/init" is used.  Check the docs of your boot loader on
+how to change the kernel parameters.
 
-3. Configure /sbin/rc and /etc/minirc.conf according to your likings.
+3. Configure /etc/minirc.conf to your needs.
 See sections "Dealing with services" and "Further configuration".
 
 4. Reboot
@@ -62,27 +52,29 @@ for poweroff to the process 1.
 Dealing with services
 ---------------------
 
-The variable ALL_DAEMONS contains a space-separated list of services that
-minirc lists when you ask which services currently run.
+The variable DAEMONS contains a space-separated list of services that minirc
+lists when you ask which services currently run.
 
-The variable DEFAULT_DAEMONS contains a space-separated list of services that
-are started on boot.
+The variable ENABLED contains a space-separated list of services that are
+started on boot.
 
-By default, the two are identical.  You can override them in /etc/minirc.conf.
-It is simply sourced by the script right after defining the default variables.
+You can override them in /etc/minirc.conf.  This file is simply sourced by the
+script right after defining the default variables.
 
 To add another service, simply add it to the respective variable.  If you don't
 specify anything else -- and this is indeed enough for most services -- minirc
-has certain standard behaviours for starting, stopping and polling a service
+has certain standard behaviors for starting, stopping and polling a service
 with the name $service:
 
-1. rc start $service          -> execute "$service"
-2. rc stop $service           -> execute "killall $service"
-3. determine if $service runs -> execute "pgrep $service"
+1. rc start $service          -> "$service"
+2. rc stop $service           -> killall "$service"
+3. determine if $service runs -> pgrep "^$service\$" >& /dev/null
 
 For some services, such as iptables, this obviously doesn't work.  For those,
-there are individual entries in the functions "start_process", "stop_process"
-and "poll_process".
+there are individual entries in the functions "default_start", "default_stop"
+and "default_poll" in /sbin/rc.  You can override them or add new ones by
+uncommenting and modifying the functions "custom_start", "custom_stop" and
+"custom_poll" in /etc/minirc.conf.
 
 
 Further configuration
@@ -90,13 +82,21 @@ Further configuration
 
 1. udev
 
-You need to decide what to use to set up the devices and load the modules.
-minirc supports busybox's mdev and systemd's udev by default.  You can change
-the udev system by writing UDEV=systemd or UDEV=busybox respectively into
-/etc/minirc.conf.
+   You need to decide what to use to set up the devices and load the modules.
+   minirc supports busybox's mdev, systemd's udev, and a fork of udev, eudev,
+   by default.  You can change the udev system by writing UDEV=busybox,
+   UDEV=systemd, or UDEV=eudev respectively into /etc/minirc.conf.
 
-systemd's udev works out of the box, so it's recommended.  To set up mdev, you
-can use this as a reference: https://github.com/slashbeast/mdev-like-a-boss
+   eudev and systemd's udev work out of the box, so they are recommended.  To
+   set up mdev, you can use this as a reference:
+   https://github.com/slashbeast/mdev-like-a-boss.
+
+2. Local startup script
+
+   Minirc will run /etc/minirc.local on boot if the file exists and has the
+   executable bit set. This allows the user to run commands in addition to the
+   basic startup that minirc provides. This is a good place to load modules if
+   udev does not detect that they should be loaded on boot.
 
 
 Usage of the user space program
@@ -109,8 +109,8 @@ process, when called by busybox init.
 About
 -----
 
-Authors: Roman Zimbelmann, Sam Stuewe
-License: GPL2
+* Authors: Roman Zimbelmann, Sam Stuewe
+* License: GPL2
 
 Parts of the function on_boot() and the start/stop function of iptables were
 taken from archlinux initscripts (http://www.archlinux.org).  I was unable to

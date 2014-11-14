@@ -21,7 +21,7 @@ custom_start()   { "$1"; }
 custom_stop()    { killall "$1"; }
 custom_poll()    { pgrep "^$1\$" >& /dev/null; }
 
-source /etc/minirc.conf
+. /etc/minirc.conf
 
 on_boot() {
     #===================
@@ -117,7 +117,7 @@ default_start() {
     dbus)
         mkdir -p /run/dbus &&
         dbus-uuidgen --ensure &&
-        /usr/bin/dbus-daemon --system
+        dbus-daemon --system
         ;;
     dhcpcd)
         if ip link | grep -Fq $NETWORK_INTERFACE; then :; else
@@ -488,10 +488,11 @@ start|stop|restart)
     echo "Usage: $self [--help] [--version] <action> [list of daemons]"
     echo
     echo "Actions:"
-    echo "   $self list     shows status of all daemons (default action)"
-    echo "   $self init     initialize the system (use in /etc/inittab only!)"
-    echo "   $self start    starts daemons"
-    echo "   $self stop     stops daemons"
-    echo "   $self restart  restarts daemons"
+    echo "   $self list               shows status of all daemons (default action)"
+    echo "   $self init               initialize the system (use in /etc/inittab only!)"
+    echo "   $self shutdown           stops everything"
+    echo "   $self start [daemons]    starts daemons"
+    echo "   $self stop [daemons]     stops daemons"
+    echo "   $self restart [daemons]  restarts daemons"
     ;;
 esac

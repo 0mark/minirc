@@ -4,12 +4,14 @@
 
 # Fallback Configuration Values, to be able to run even with a broken, deleted
 # or outdated minirc.conf:
-CORE="apifs swap localtime network udev mount"
-EXTRA="acpid alsa avahi conman consolefont cups dbus dhcpcd dkms iptables keymap ldm local nfsmount ntpd sshd syslog-ng wpa_supplicant"
+CORE="apifs swap !localtime !network udev mount"
+EXTRA="acpid alsa avahi bluetoothd conman !consolefont cups dbus dhcpcd dkms iptables !keymap ldm local nfsmount ntpd sshd syslog syslog-ng wpa_supplicant"
 LOCAL=""
 DISABLE=""
+
 ENABLED="${CORE} syslog-ng @crond @dhcpcd @sshd"
-[ -f /usr/lib/systemd/systemd ] && UDEV="systemd" || UDEV="busybox"
+
+[ -f /usr/lib/systemd/systemd ] && UDEV="systemd" || [ -f /usr/sbin/udevd ] && UDEV="eudev" || UDEV="busybox";
 NETWORK_INTERFACE="eth0"
 WIFI_INTERFACE="wlan0"
 
@@ -26,6 +28,9 @@ on_boot() {
     # start the default daemons
     echo_color 2 " # " "starting daemons:\n"
     for dmn in $ENABLED; do
+        if [[ "${dmn:0:1}" == '!' ]]; then
+            dmn="${dmn:1}"
+        fi
         if [[ "${dmn:0:1}" == '@' ]]; then
             bg_run start "${dmn:1}"
         else
@@ -47,13 +52,13 @@ on_shutdown() {
     for grp in LOCAL EXTRA eroc; do
         echo_color 4 " * " "$grp\n"
         for dmn in ${!grp}; do
-            if [[ " $DISABLE " != *" $dmn "* ]]; then
+            if [[ "${dmn:0:1}" != '!' && " $DISABLE " != *" $dmn "* ]]; then
                 default_poll "$dmn" >& /dev/null
                 ret=$?
                 if [ $ret -eq 0 ]; then
                     bg_run stop "$dmn"
                     echo
-                elif [ $ret -eq 255 ]; then
+                elif [ $ret -eq 254 ]; then
                     bg_run stop "$dmn"
                     echo
                 fi
@@ -91,6 +96,9 @@ default_start() {
     avahi)
         /usr/bin/avahi-daemon -s -D
         /usr/bin/avahi-dnsconfd -s -D
+        ;;
+    bluetoothd)
+        daemonize /usr/lib/bluetooth/bluetoothd
         ;;
     conman)
         /usr/bin/connmand --nodnsproxy
@@ -178,6 +186,10 @@ default_start() {
     swap)
         swapon -a
         ;;
+    syslog)
+        /usr/bin/syslogd
+        /usr/bin/klogd -c 3
+        ;;
     syslog-ng)
         syslog-ng
         ;;
@@ -235,12 +247,28 @@ default_stop() {
             iptables-restore < /var/lib/iptables/empty-$table.rules
         done
         ;;
+    local)
+        if [ -x /etc/minirc.local.stop ]; then
+            /etc/minirc.local.stop
+        else
+            echo "/etc/minirc.local.stop not found!"
+            return 1
+        fi
+        ;;
     nfsmount)
         killall rpc.statd
         killall rpcbind
         ;;
+    mount)
+        sync
+        umount -a
+        ;;
     swap)
         swapoff -a
+        ;;
+    syslog)
+        killall syslogd
+        killall klogd
         ;;
     udev)
         if [ "$UDEV" == systemd ]; then
@@ -258,10 +286,9 @@ default_restart() { custom_restart "$@"; }
 default_poll() {
     case "$1" in
     alsa)
-        return 255  # doesn't make much sense for this service
+        return 255
         ;;
     apifs)
-        #[ $(df -a -l | egrep "/proc\$|/sys\$|/run\$|/dev\$|/dev/pts\$|/dev/shm\$" | wc -l) -eq 6 ]
         [ $(cat /etc/mtab | egrep " /proc | /sys | /run | /dev | /dev/pts | /dev/shm " | wc -l) -eq 6 ]
         ;;
     avahi)
@@ -281,24 +308,28 @@ default_poll() {
         pgrep connmand > /dev/null
         ;;
     consolefont)
-        return 255  # doesn't make much sense for this service
+        return 255
         ;;
     iptables)
         iptables -L | grep -m 1 -q '^ACCEPT\|^REJECT'
         ;;
     keymap)
-        return 255  # doesn't make much sense for this service
+        return 255
         ;;
     local)
-        return 255  # doesn't make much sense for this service
+        if [ -x /etc/minirc.local ]; then
+            return 255
+        else
+            return 1
+        fi
         ;;
     localtime)
         if [ -f /etc/localtime ]; then
-            #if [ "$(hwclock | sed 's/.* \([0-9]\+\):.*/\1/g')" != "$(date | sed 's/.* \([0-9]\+\):.*/\1/g')" ]; then
-            #    return 0;
-            #else
-                return 255;
-            #fi
+            if [ "$(hwclock --localtime | sed 's/.* \([0-9]\+\):.*/\1/g')" == "$(date | sed 's/.* \([0-9]\+\):.*/\1/g')" ]; then
+                return 0;
+            else
+                return 1;
+            fi
         else
             return 1;
         fi
@@ -307,19 +338,25 @@ default_poll() {
         ip link | grep ": lo:" &> /dev/null
         ;;
     mount)
-        return 255  # doesn't make much sense for this service
+        return 255
         ;;
     nfsmount)
         pgrep rpcbind && pgrep rpc.statd > /dev/null
         ;;
     swap)
-        [ "$(swapon | wc -l)" -gt 1 ] && return 255
+        [ "$(swapon | wc -l)" -gt 1 ] && return 0
         return 1
         ;;
+    syslog)
+        pgrep syslogd && pgrep klogd > /dev/null
+        ;;
     udev)
-        if [ "$UDEV" == systemd ]; then
+        if [ "$UDEV" == "systemd" ]; then
             ps -A | grep systemd-udevd &> /dev/null
-        else # use busybox mdev as fallback:
+        elif [ "$UDEV" == "eudev" ]; then
+            ps -A | grep udevd &> /dev/null
+        else
+            # use busybox mdev as fallback:
             ps -A | grep mdev &> /dev/null
         fi
         ;;
@@ -395,16 +432,22 @@ start|stop|restart)
     cmd="$1"
     shift
     for dmn in ${@}; do
-        if [[ " $CORE $EXTRA $LOCAL " == *" $dmn "* ]]; then
-            if [[ " $DISABLE " != *" $dmn "* ]]; then
-                run $cmd $dmn
-                echo
-                list_errors
-            else
-                echo_color 1 "!" " $dmn is disabled\n"
+        if [[ " $CORE $EXTRA $LOCAL " == *" !$dmn "* ]]; then
+            if [ $cmd == "stop" ]; then
+                echo_color 1 "!" " $dmn can't be stopped\n"
+                exit
             fi
-        else
+        elif [[ " $CORE $EXTRA $LOCAL " != *" $dmn "* ]]; then
             echo_color 1 "!" " $dmn unknown\n"
+            exit
+        fi
+
+        if [[ " $DISABLE " != *" $dmn "* ]]; then
+            run $cmd $dmn
+            echo
+            list_errors
+        else
+            echo_color 1 "!" " $dmn is disabled\n"
         fi
     done
     ;;
@@ -413,15 +456,25 @@ start|stop|restart)
     for grp in CORE EXTRA LOCAL; do
         echo_color 4 " * " "$grp\n"
         for dmn in ${!grp}; do
+            if [[ "${dmn:0:1}" == '!' ]]; then
+                dmn="${dmn:1}"
+                running=" ✓ "
+                stopped="   "
+                unknown=" ? "
+            else
+                running="[✓]"
+                stopped="[ ]"
+                unknown="[?]"
+            fi
             if [[ " $DISABLE " != *" $dmn "* ]]; then
                 default_poll "$dmn" >& /dev/null
                 ret=$?
                 if [ $ret -eq 0 ]; then
-                    echo_color 2 "[X] ${dmn}\n"
+                    echo_color 2 "$running ${dmn}\n"
                 elif [ $ret -eq 255 ]; then
-                    echo_color 3 "[?] ${dmn}\n"
+                    echo_color 3 "$unknown ${dmn}\n"
                 else
-                    echo_color 0 "[ ] ${dmn}\n"
+                    echo_color 0 "$stopped ${dmn}\n"
                 fi
             fi
         done

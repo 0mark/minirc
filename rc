@@ -107,8 +107,9 @@ default_start() {
         cupsd
         ;;
     dbus)
-        mkdir -p /run/dbus
-        /usr/bin/dbus-daemon --system #--address=systemd: --nofork --nopidfile --systemd-activation
+        mkdir -p /run/dbus &&
+        dbus-uuidgen --ensure &&
+        /usr/bin/dbus-daemon --system
         ;;
     dhcpcd)
         if ip link | grep -Fq $NETWORK_INTERFACE; then :; else
@@ -186,6 +187,10 @@ default_start() {
             /usr/bin/udevadm trigger --action=add --type=subsystems
             /usr/bin/udevadm trigger --action=add --type=devices
             /usr/lib/systemd/systemd-modules-load
+        elif [ "$UDEV" = eudev ]; then
+            /usr/bin/udevd --daemon
+            /usr/bin/udevadm trigger --action=add --type=subsystems
+            /usr/bin/udevadm trigger --action=add --type=devices
         else # use busybox mdev as fallback:
             busybox mdev -s
             echo /sbin/mdev > /proc/sys/kernel/hotplug

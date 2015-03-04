@@ -11,7 +11,14 @@ DISABLE=""
 
 ENABLED="${CORE} syslog-ng @crond @dhcpcd @sshd"
 
-[ -f /usr/lib/systemd/systemd ] && UDEV="systemd" || [ -f /usr/sbin/udevd ] && UDEV="eudev" || UDEV="busybox";
+if [ -f /usr/lib/systemd/systemd ]; then
+    UDEV="systemd"
+elif [ -f /usr/sbin/udevd ]; then
+    UDEV="eudev"
+else
+    UDEV="busybox"
+fi
+
 NETWORK_INTERFACE="eth0"
 WIFI_INTERFACE="wlan0"
 
